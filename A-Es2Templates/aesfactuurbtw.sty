@@ -1,0 +1,686 @@
+% Copyright (C) 2008-2014 TeXniCie A-Eskwadraat <hektex@a-eskwadraat.nl>
+%
+% This file is part of the A-Eskwadraat LaTeX collection and may be
+% redistributed under the terms of version 2 of the GNU General Public License
+% as published by the Free Software Foundation. See LICENSE file for details.
+%
+%% $Id: aesfactuurbtw.sty 665 2014-04-23 14:03:38Z peterboot $
+
+\NeedsTeXFormat{LaTeX2e}[1999/06/01]
+
+\newcommand\factuur@packagenaam{aesfactuurbtw}
+
+\ProvidesPackage{\factuur@packagenaam}[2012/11/02 v0.1 Eenvoudige 
+facturen met btw en aesbrief-integratie]
+
+\RequirePackage{aestaal}
+
+\RequirePackage{substr}
+\RequirePackage{ifthen}
+\RequirePackage{calc}
+
+
+
+%%% Errors enzo
+
+\newcommand\FactuurError@verdwaald[1]{%
+\PackageError{\factuur@packagenaam} {Verdwaald #1-commando}%
+                                    {Dit commando mag alleen binnen de factuur-omgeving voorkomen.\MessageBreak%
+                                     Zet #1\space tussen \protect\begin{factuur} en \protect\end{factuur}.}%
+}
+
+
+%%% Een lettertype
+\newcommand\aes@fonttitel{\fontsize{18}{20}\selectfont\bfseries}
+
+
+%%% Rekenen
+
+% Zero-padding tot drie nullen.
+% #1 - De counter om te padden.
+% #2 - De getekstificeerde counter (\the#1, als het ware).
+\newcommand\@drienullen[1]{%
+\ifthenelse{#1>99}{#1}{%
+  \ifthenelse{#1>9}{0#1}{00#1}%
+}%
+}
+
+
+%%% Gekke nep-booleans
+% ifthenelse en tabular koesteren een diepe haat jegens elkaar. Daarom gebruiken
+% we deze nepbooleans.
+
+% \newnepboolean{aap} maakt een commando \ifaap. Zie \settrue.
+\newcommand\newnepboolean[1]{%
+\settrue{#1}%
+}
+
+% Zorgt dat \ifaap{ja}{nee} ja oplevert.
+\newcommand\settrue[1]{%
+\expandafter\gdef\csname if#1\endcsname##1##2{##1}%
+}
+% Zorgt dat \ifaap{ja}{nee} nee oplevert.
+\newcommand\setfalse[1]{%
+\expandafter\gdef\csname if#1\endcsname##1##2{##2}%
+}
+
+
+
+%%% Gebruikers-commando's
+% Aantal dagen van de betalingstermijn
+\newcommand\aes@betalingstermijn{28}
+\newcommand\betalingstermijn[1]{\renewcommand\aes@betalingstermijn{#1}}
+
+\newcommand\valuta[1]{%
+  \renewcommand\factuur@valutasym{#1}%
+}
+\newcommand\factuur@valutasym{\euro}
+
+
+\newboolean{factuur@buitenland}
+\newcommand\buitenlandbetaling{\setboolean{factuur@buitenland}{true}}
+\newcommand\binnenlandbetaling{\setboolean{factuur@buitenland}{false}}
+
+
+%% Ontour spul toevoegen zodat buitenlandbetalingen ook naar ontour gaan als de optie ontour gezet is.
+\ifthenelse{\boolean{aes@ontour}}{%
+  \setboolean{aes@optfooter}{false}%
+  \email{ontour@A-Eskwadraat.nl}%
+  \afzendernaam\TAALontournaam%
+  \def\aes@kvknr{30230072}%
+  \def\aes@bank{ING}%
+  \def\aes@giro{4559482}%
+  \def\aes@BIC{INGBNL2A}%
+  \def\aes@IBAN{NL39INGB0004559482}%
+  \def\aes@rekeninghouder{\TAALontournaam}%
+  \renewcommand\aes@returnline{\aesnaam On Tour, Princetonplein~5, 3584~CC~~Utrecht\aes@NL}%
+}{}
+
+\newcommand\aes@betaalinstructie{}
+\newcommand\betaalinstructie[1]{\renewcommand\aes@betaalinstructie{#1}}
+\newcommand\autobetaalinstructie{
+  \renewcommand\aes@betaalinstructie{
+    \ifthenelse{\boolean{factuur@teruggave}}{
+      \TAALterugkrijginstructie
+    }{
+      \ifthenelse{\boolean{factuur@buitenland}}{
+        \def\@IBANspul{IBAN:~\aes@IBAN, BIC:~\aes@BIC}
+      }{
+        \def\@IBANspul{}
+      }
+      \TAALbetaalinstructie{\aes@betalingstermijn}{\aes@bank}{\aes@giro}{\@IBANspul}{\aes@rekeninghouder}{\factuur@ovv}
+    }
+  }
+}
+\autobetaalinstructie
+
+\newcommand\factuur@post@err[2]{%post buiten factuur
+\FactuurError@verdwaald{\protect\post}%
+}
+
+% Wat BTW counters
+\newcounter{factuur@totLaagEx}
+\newcounter{factuur@totLaagBTW}
+\newcounter{factuur@totHoogEx}
+\newcounter{factuur@totHoogBTW}
+%\newcounter{factuur@totGeen}
+\newcounter{factuur@totEx}
+\newcounter{factuur@totBTW}
+
+% Een normale post (omschrijving en bedrag).
+\newcounter{factuur@tmpbedrag}
+\newcounter{factuur@tmpbedragcent}
+
+\newcommand\factuur@post[2]{%
+  \parseBedrag{#2}{factuur@tmpbedrag}%
+  \addtocounter{factuur@totEx}{\thefactuur@tmpbedrag}%
+  \addtocounter{factuur@Totaal}{\thefactuur@tmpbedrag}%
+  \factuur@zetpost{#1}{\thefactuur@tmpbedrag}%
+}
+
+\newcommand\factuur@postlaag[2]{%
+  \parseBedrag{#2}{factuur@tmpbedrag}%
+  % voeg het bedrag ex btw integraal toe
+  \addtocounter{factuur@totLaagEx}{ \thefactuur@tmpbedrag }%
+  \addtocounter{factuur@totEx}{ \thefactuur@tmpbedrag }%
+  \addtocounter{factuur@Totaal}{ \thefactuur@tmpbedrag }%
+  % bereken de hoeveelheid btw, en rond het af
+  %\setcounter{factuur@tmpbedrag1}{ \thefactuur@tmpbedrag * 6 / 100 }%
+  \rondaf{\thefactuur@tmpbedrag * 6 / 100 }{factuur@tmpbedragcent}%
+  \addtocounter{factuur@totLaagBTW}{\thefactuur@tmpbedragcent}%
+  \addtocounter{factuur@totBTW}{\thefactuur@tmpbedragcent}%
+  \addtocounter{factuur@Totaal}{\thefactuur@tmpbedragcent}%
+  % zet de post op de factuur
+  \factuur@zetpostbtw{#1}{\thefactuur@tmpbedrag}{6}%
+  %
+}
+
+\newcommand\factuur@postlaaginclusief[2]{%
+  \parseBedrag{#2}{factuur@tmpbedrag}%
+  % bereken de hoeveelheid btw, en rond het af
+  \rondaf{\thefactuur@tmpbedrag * 100 / 106}{factuur@tmpbedragcent}%
+  % voeg het bedrag ex btw integraal toe
+  \addtocounter{factuur@totLaagEx}{ \thefactuur@tmpbedragcent }%
+  \addtocounter{factuur@totEx}{ \thefactuur@tmpbedragcent }%
+  \addtocounter{factuur@Totaal}{ \thefactuur@tmpbedragcent }%
+  % trek het bedrag ex btw af van het bedrag inclusief btw om de btw te krijgen
+  \setcounter{factuur@tmpbedrag}{\thefactuur@tmpbedrag -  \thefactuur@tmpbedragcent}%
+  \addtocounter{factuur@totLaagBTW}{\thefactuur@tmpbedrag}%
+  \addtocounter{factuur@totBTW}{\thefactuur@tmpbedrag}%
+  \addtocounter{factuur@Totaal}{\thefactuur@tmpbedrag}%
+  % zet de post op de factuur
+  \factuur@zetpostbtw{#1}{\thefactuur@tmpbedragcent}{6}%
+}
+
+\newcommand\factuur@posthoog[2]{%
+  \parseBedrag{#2}{factuur@tmpbedrag}%
+  % voeg het bedrag ex btw integraal toe
+  \addtocounter{factuur@totHoogEx}{ \thefactuur@tmpbedrag }%
+  \addtocounter{factuur@totEx}{ \thefactuur@tmpbedrag }%
+  \addtocounter{factuur@Totaal}{ \thefactuur@tmpbedrag }%
+  % bereken de hoeveelheid btw, en rond het af
+  %\setcounter{factuur@tmpbedrag1}{ \thefactuur@tmpbedrag * 6 / 100 }%
+  \rondaf{\thefactuur@tmpbedrag * 21 / 100 }{factuur@tmpbedragcent}%
+  \addtocounter{factuur@totHoogBTW}{\thefactuur@tmpbedragcent}%
+  \addtocounter{factuur@totBTW}{\thefactuur@tmpbedragcent}%
+  \addtocounter{factuur@Totaal}{\thefactuur@tmpbedragcent}%
+  % zet de post op de factuur
+  \factuur@zetpostbtw{#1}{\thefactuur@tmpbedrag}{21}%
+  %
+}
+
+\newcommand\factuur@posthooginclusief[2]{%
+  \parseBedrag{#2}{factuur@tmpbedrag}%
+  % bereken de hoeveelheid btw, en rond het af
+  \rondaf{\thefactuur@tmpbedrag * 100 / 121}{factuur@tmpbedragcent}%
+  % voeg het bedrag ex btw integraal toe
+  \addtocounter{factuur@totHoogEx}{ \thefactuur@tmpbedragcent }%
+  \addtocounter{factuur@totEx}{ \thefactuur@tmpbedragcent }%
+  \addtocounter{factuur@Totaal}{ \thefactuur@tmpbedragcent }%
+  % trek het bedrag ex btw af van het bedrag inclusief btw om de btw te krijgen
+  \setcounter{factuur@tmpbedrag}{\thefactuur@tmpbedrag -  \thefactuur@tmpbedragcent}%
+  %
+  \addtocounter{factuur@totHoogBTW}{\thefactuur@tmpbedrag}%
+  \addtocounter{factuur@totBTW}{\thefactuur@tmpbedrag}%
+  \addtocounter{factuur@Totaal}{\thefactuur@tmpbedrag}%
+  % zet de post op de factuur
+  \factuur@zetpostbtw{#1}{\thefactuur@tmpbedragcent}{21}%
+  %
+}
+
+\let\post\factuur@post@err
+\let\postlaag\factuur@postlaag
+\let\postlaaginclusief\factuur@postlaaginclusief
+\let\posthoog\factuur@posthoog
+\let\posthooginclusief\factuur@posthooginclusief
+
+
+
+\newcommand\factuur@procent@err[2]{%procent buiten factuur
+\FactuurError@verdwaald{\protect\procent}%
+}
+
+% Een percentagepost (omschrijving en percentage van subtotaal).
+\newcounter{factuur@tmpprocent}%
+\newcommand\factuur@procent[2]{%
+\PackageError{\factuur@packagenaam}{\protect\procent\ werkt op dit moment nog niet samen met de BTW-berekening.}{}%
+%  \parsePercentage{#2}\tmp@procent\tmp@procenttxt%
+%  %
+%  \setcounter{factuur@tmpbedrag}{%
+%  \thefactuur@Totaal * \real{\tmp@procent} / 100}%
+%  \addtocounter{factuur@Totaal}{\thefactuur@tmpbedrag}%
+%  \factuur@zetpost{#1 (\tmp@procenttxt\%)}{\thefactuur@tmpbedrag}%
+}
+
+\let\procent\factuur@procent@err
+
+\newcommand\factuur@invul@err[1]{%
+\FactuurError@verdwaald{\protect\invul}%
+}
+
+% Een invulpost (alleen omschrijving).
+% Het totaal wordt gemarkeerd als verbokt.
+\newcommand\factuur@invul[1]{%
+  \settrue{factuur@TotaalVerbokt}%
+  \factuur@zetpostnep{#1}{\dotfill}%
+}
+
+\let\invul\factuur@invul@err
+
+\newcommand\factuur@subtotaal{%
+\iffactuur@TotaalVerbokt{%
+  \PackageError{\factuur@packagenaam}{\protect\subtotaal\space kan niet meer na
+  \protect\invul}{}%
+}{%
+  \hline\\[-2mm] \factuur@zetpost{\bfseries{\TAALsubtotaal}}{\thefactuur@totEx}%
+}
+}
+
+
+\newcommand\factuur@subtotaal@err{%subtotaal buiten factuur
+\FactuurError@verdwaald{\protect\subtotaal}%
+}
+
+
+\let\subtotaal\factuur@subtotaal@err
+
+\newnepboolean{factuur@TotaalVerbokt}%
+\newcounter{factuur@Totaal}%
+\newcounter{factuur@TotaalLaag}%
+\newcounter{factuur@TotaalHoog}%
+
+% De factuur-omgeving
+\newenvironment{factuur}{%
+\setfalse{factuur@TotaalVerbokt}
+\setcounter{factuur@Totaal}{0}%
+\setcounter{factuur@TotaalLaag}{0}%
+\setcounter{factuur@TotaalHoog}{0}%
+%
+\let\post\factuur@post%
+\let\procent\factuur@procent%
+\let\invul\factuur@invul%
+\let\subtotaal\factuur@subtotaal%
+%
+% tabel: omschrijving, btw, min, valuta, helen, komma, halven
+\begin{tabular}{lrc@{}c@{}r@{}c@{}l}%
+\bfseries \TAALomschrijving & \bfseries \TAALbtw & \multicolumn{5}{r}{\bfseries \TAALbedrag}\\%
+\hline\hline \\[-2mm]%
+}{%
+\hline\\[-2mm] \factuur@zetpost{\bfseries\TAALtotaal\ \TAALexbtw}{\thefactuur@totEx}%
+&& \\
+\ifthenelse{\thefactuur@totLaagBTW > 0}{\factuur@zetpost{6\% \TAALbtw\ \TAALover \factuur@inlinebedrag{\thefactuur@totLaagEx}}{\thefactuur@totLaagBTW}}{}%
+\ifthenelse{\thefactuur@totHoogBTW > 0}{\factuur@zetpost{21\% \TAALbtw\ \TAALover \factuur@inlinebedrag{\thefactuur@totHoogEx}}{\thefactuur@totHoogBTW}}{}%
+%ongelofelijk lelijke hack!
+\\[-4mm]\hline \\[-2mm] %
+\bfseries \TAALtotaal\ \TAALinclbtw & &
+  % Zet het totaal neer, of puntjes als er geen totaal is.
+  \iffactuur@TotaalVerbokt{%
+    \multicolumn{5}{r}{\dotfill}
+  }{%
+    \bfseries \factuur@bedrag{\thefactuur@Totaal}
+  } \\
+\end{tabular}
+
+%
+\let\post\factuur@post@err%
+\let\procent\factuur@procent@err%
+\let\invul\factuur@invul@err%
+\let\subtotaal\factuur@subtotaal@err%
+}
+
+
+
+%%% Intern spul
+\newcommand\factuur@zetpost[2]{%
+\factuur@zetpostraw{#1}{\factuur@bedrag{#2}}{}%
+}
+
+\newcommand\factuur@zetpostnep[2]{%
+\factuur@zetpostraw{#1}{\multicolumn{5}{r}{#2}}{}%
+}
+
+\newcommand\factuur@zetpostbtw[3]{%
+\factuur@zetpostraw{#1}{\factuur@bedrag{#2}}{#3\%}%
+}
+
+\newcommand\factuur@zetpostraw[3]{%
+\vspace{2mm}
+\parbox[b]{\textwidth*3/4}{#1} & #3 & #2 \\
+}
+
+
+\newcounter{duizend}        % Counters voor
+\newcounter{dheen}          %   het afpellen
+\newcounter{dterug}         %   van duizendtallen.
+\newsavebox\@bouwbedrag     % Gebruikt om het bedrag achterstevoren op te bouwen.
+\newcounter{@geld}
+\newcounter{@heel}
+\newcounter{@cent}
+\newcounter{@rest}
+
+% Laat een bedrag mooi zien met valutateken, duizendtalpunten en een komma.
+\newboolean{factuur@tmpisneg}
+\newcommand\factuur@bedrag[1]{%
+  % Kijk of het bedrag negatief is en zorg dat het positief is.
+   \setcounter{@geld}{#1}%
+  \ifthenelse{\the@geld < 0}{%
+    \setboolean{factuur@tmpisneg}{true}%
+  }{%
+    \setboolean{factuur@tmpisneg}{false}%
+  }%
+  \ifthenelse{\boolean{factuur@tmpisneg}}{%
+    \setcounter{@geld}{-\the@geld}%
+  }{}%
+  %
+  % Scheid bedrag in helen en centen.
+  \setcounter{@heel}{\the@geld / 1000}%
+  \setcounter{@cent}{(\the@geld - \the@heel * 1000) / 10}%
+  \setcounter{@rest}{(\the@geld - \the@heel * 1000) - (\the@cent * 10)}%
+  %
+  \ifthenelse{\boolean{factuur@tmpisneg}}{--}{} &
+  \factuur@valutasym~ &
+    % Laat de helen zien, met duizendtalpunten.
+    % TODO uitgebreid en; er mogen geen verkeerde bedragen op een factuur komen!
+    \setcounter{duizend}{\the@heel}%
+    \ifthenelse{\value{duizend} > 999}{% Gaan we uberhaupt puntjes zetten?
+      % Pel het bedrag af per duizendtal.
+      \whiledo{\value{duizend} > 999}{%
+        \setcounter{dheen}{\value{duizend}/1000}%
+        \setcounter{dterug}{\value{duizend}-\value{dheen}*1000}%
+        \savebox\@bouwbedrag{\TAALduizendsym\@drienullen{\thedterug}\usebox\@bouwbedrag}%
+        \setcounter{duizend}{\value{dheen}}%
+      }%
+      % Het laatste restje is het hoogste net-geen-duizendtal.
+      \theduizend%
+      % Zet het opgebouwde bedrag neer.
+      \usebox\@bouwbedrag%
+    }{%
+      % Geen duizendtallen, dus gewoon het bedrag zonder padding of wat dan ook.
+      \theduizend%
+    }%
+  & \TAALdecimaalsym &
+%	% De fancy afronding zit 'm hierin!
+	\ifthenelse{\the@rest < 5}{}{\addtocounter{@cent}{1}}%
+    % Laat de centen zien. Zet er een 0 voor indien < 10.
+    \ifthenelse{\the@cent < 10}{0}{}\the@cent
+}
+
+\newcommand\rondaf[2]{%
+  \setcounter{@geld}{#1}%
+%%  % Scheid bedrag in helen en centen.
+ \setcounter{@heel}{\the@geld / 1000}%
+  \setcounter{@cent}{(\the@geld - \the@heel * 1000) / 10}%
+  \setcounter{@rest}{(\the@geld - \the@heel * 1000) - (\the@cent * 10)}%
+%%  %
+  \ifthenelse{\the@rest < 5}{}{\addtocounter{@cent}{1}}%
+  \setcounter{#2}{\the@heel*1000 + \the@cent*10}%
+}
+
+\newcommand\factuur@inlinebedrag[1]{%
+  % Kijk of het bedrag negatief is en zorg dat het positief is.
+   \setcounter{@geld}{#1}%
+  \ifthenelse{\the@geld < 0}{%
+    \setboolean{factuur@tmpisneg}{true}%
+  }{%
+    \setboolean{factuur@tmpisneg}{false}%
+  }%
+  \ifthenelse{\boolean{factuur@tmpisneg}}{%
+    \setcounter{@geld}{-\the@geld}%
+  }{}%
+  %
+  % Scheid bedrag in helen en centen.
+  \setcounter{@heel}{\the@geld / 1000}%
+  \setcounter{@cent}{(\the@geld - \the@heel * 1000) / 10}%
+  \setcounter{@rest}{(\the@geld - \the@heel * 1000) - (\the@cent * 10)}%
+  %
+  \ifthenelse{\boolean{factuur@tmpisneg}}{--}{}
+  \factuur@valutasym\ 
+    % Laat de helen zien, met duizendtalpunten.
+    % TODO uitgebreid testen; er mogen geen verkeerde bedragen op een factuur komen!
+    \setcounter{duizend}{\the@heel}%
+    \ifthenelse{\value{duizend} > 999}{% Gaan we uberhaupt puntjes zetten?
+      % Pel het bedrag af per duizendtal.
+      \whiledo{\value{duizend} > 999}{%
+        \setcounter{dheen}{\value{duizend}/1000}%
+        \setcounter{dterug}{\value{duizend}-\value{dheen}*1000}%
+        \savebox\@bouwbedrag{\TAALduizendsym\@drienullen{\thedterug}\usebox\@bouwbedrag}%
+        \setcounter{duizend}{\value{dheen}}%
+      }%
+      % Het laatste restje is het hoogste net-geen-duizendtal.
+      \theduizend%
+      % Zet het opgebouwde bedrag neer.
+      \usebox\@bouwbedrag%
+    }{%
+      % Geen duizendtallen, dus gewoon het bedrag zonder padding of wat dan ook.
+      \theduizend%
+    }%
+  \TAALdecimaalsym
+	% De fancy afronding zit 'm hierin!
+	%
+	%
+	\ifthenelse{\the@rest < 5}{}{\addtocounter{@cent}{1}}%
+	%
+	%
+    % Laat de centen zien. Zet er een 0 voor indien < 10.
+    \ifthenelse{\the@cent < 10}{0}{}\the@cent
+}
+
+%%% Parsen van bedragen
+
+% Stop-teken voor het parsen. Maakt eigenlijk niet uit wat erin staat, zolang
+% het maar meer dan \'e\'en karakter is.
+\def\P@stop{blablabla}
+
+% Definieer een commando dat karakters langsgaat.
+% #1 - te definieren commando
+% #2 - wat te doen als het geen \stop is? Het karakter is hierin #1.
+\def\defP@char#1#2{%
+  \def#1##1{%
+    \ifthenelse{\equal{##1}{\P@stop}}{%
+      %stop
+    }{%
+      #2%
+    }%
+  }%
+}
+
+% Definieer een commando dat digits langsgaat.
+% #1 - te definieren commando
+% #2 - commando om digits in op te slaan
+% #3 - counter om de digits mee te tellen
+% #4 - wat te doen als het een komma/punt is?
+\def\defP@digit#1#2#3#4{%
+  \defP@char#1{%
+    \IfCharInString{##1}{,.}{%
+      #4%
+    }{%
+      \IfCharInString{##1}{0123456789}{%
+        %opslaan
+        \edef#2{#2##1}%
+        %tellen
+        \stepcounter{#3}%
+        %verder
+        #1%
+      }{%
+        \PackageError{\factuur@packagenaam}{Ongeldig karakter `##1' in bedrag}{}%
+      }%
+    }%
+  }%
+}
+
+% Parser voor prefix +/-
+\defP@char\P@prefix{%
+  \setboolean{bool@negatief}{false}%
+  \ifthenelse{\equal{#1}{+}}{%
+    % Positief. Gewoon doorgaan.
+    \P@heel%
+  }{%
+    \ifthenelse{\equal{#1}{-}}{%
+      % Negatief. Onthouden en doorgaan.
+      \setboolean{bool@negatief}{true}%
+      \P@heel%
+    }{%
+      % Onbekende prefix, dus zet die weer terug in de te parsen string
+      \P@heel#1%
+    }
+  }
+}
+
+% Parser voor hele euro's
+\defP@digit\P@heel%
+% sla op in:
+  \result@helen%
+{% tel met counter:
+  cnt@helen%
+}{% doe na de komma:
+  \P@cent% centen parsen
+}
+
+% Parser voor centen
+\defP@digit\P@cent%
+% sla op in:
+  \result@centen%
+{% tel met counter:
+  cnt@centen%
+}{% doe na de komma:
+  \PackageError{\factuur@packagenaam}{Twee keer een komma (of punt) in bedrag}{}%
+}
+
+% Tellertjes en boolean
+\newcounter{cnt@helen}     % het aantal hele-euro-digits
+\newcounter{cnt@centen}    % het aantal cent-digits
+\newboolean{bool@negatief} % negatief of niet?
+
+% Parse een bedrag-achtig iets. De resultaten komen in de daarvoor bestemde
+% commando's en counters.
+\newcommand\factuur@bedragachtig[1]{%
+  % Begin op nul
+  \def\result@helen{}%
+  \setcounter{cnt@helen}{0}%
+  \def\result@centen{}%
+  \setcounter{cnt@centen}{0}%
+  % Expandeer het argument (zodat er ook commando's in het bedrag kunnen worden
+  % gebruikt)
+  \edef\@argexpanded{#1}%
+  % Parsen maar (met \P@heel)
+  \expandafter\P@prefix\@argexpanded\P@stop%
+}
+
+% Parser voor hele bedragen.
+% #1 - het bedrag als string
+% #2 - een counter om het resultaat in op te slaan
+\newcommand\parseBedrag[2]{%
+  \factuur@bedragachtig{#1}%
+  %
+  % Controleer op zinnig aantal cent-digits
+  \ifthenelse{\thecnt@centen = 2 \OR \thecnt@centen = 0}{}{%
+    \PackageError{\factuur@packagenaam}{Raar aantal centen opgegeven in bedrag}{}%
+  }%
+  % Maak er een bedrag in centen van
+  \setcounter{#2}{0\result@helen * 1000 + 0\result@centen * 10}%
+  % En maak het negatief indien nodig
+  \ifthenelse{\boolean{bool@negatief}}{%
+    \setcounter{#2}{-\value{#2}}%
+  }{}%
+}
+
+
+% Parser voor percentages.
+% #1 - het percentage als string
+% #2 - een commando (!) om het resultaat in op te slaan, geschikt voor \real
+% #3 - een commando (!) om een tekstrepresentatie in op te slaan
+\newcommand\parsePercentage[3]{%
+  \factuur@bedragachtig{#1}%
+  %
+  % Maak een string die geschikt is voor \real (#2) en voor de uitvoer (#3)
+  \ifthenelse{\thecnt@centen > 0}{%
+    \edef#2{0\result@helen.\result@centen}%
+    \edef#3{\result@helen \TAALdecimaalsym \result@centen}%
+  }{%
+    \edef#2{0\result@helen}%
+    \edef#3{\result@helen}%
+  }%
+  % En maak het negatief indien nodig
+  \ifthenelse{\boolean{bool@negatief}}{%
+    \edef#2{-#2}%
+    \edef#3{-#3}%
+  }{}%
+}
+
+
+%%% Integratie met aesbrief
+\newcommand\factuur@geenaesbrief{
+  \newenvironment{factuurbrief}[1]{
+    \PackageError{\factuur@packagenaam}{Alleen gedefinieerd binnen de aesbrief-class}
+      {Gebruik \protect\documentclass{aesbrief}.}
+  }{}
+}
+\newcommand\factuur@welaesbrief{
+  \newboolean{factuur@teruggave}
+  \newboolean{factuur@herinnering}
+  \newboolean{factuur@aanmaning}
+  \setboolean{factuur@herinnering}{false}
+  \setboolean{factuur@aanmaning}{false}
+
+
+  \newcommand\factuur@ovv{\aes@onsk}
+  \newcommand\factuur@titel{}
+
+  % Stel ovv in.
+  \newcommand\ovv[1]{\renewcommand\factuur@ovv{##1}}
+
+  % Reset de ovv naar automatisch (zelfde als ons kenmerk).
+  \newcommand\autoovv{\ovv{\aes@onsk}}
+
+  % Maak dit wel of geen herinneringsfactuur.
+  \newcommand\herinnering{\setboolean{factuur@herinnering}{true} \setboolean{factuur@aanmaning}{false}}
+  \newcommand\geenherinnering{\setboolean{factuur@herinnering}{false}}
+  
+  % Maak dit wel of geen aanmaning
+  \newcommand\aanmaning{\setboolean{factuur@aanmaning}{true} \setboolean{factuur@herinnering}{false}}
+  \newcommand\geenaanmaning{\setboolean{factuur@aanmaning}{false}}
+
+  % Stel de factuurtitel in (leeg -> automatisch).
+  \newcommand\factuurtitel[1]{\renewcommand\factuur@titel{##1}}
+  \newcommand\autofactuurtitel{\factuurtitel{}}
+  
+  % De automatische factuurtitel voor als er geen factuurtitel is opgegeven.
+  \newcommand\@autofactuurtitel{
+    \ifthenelse{\boolean{factuur@teruggave}}{%
+      \TAALteruggave%
+    }{%
+      \ifthenelse{\boolean{factuur@herinnering}}{%
+        \TAALherinnering%
+      }{%
+      %
+	   \ifthenelse{\boolean{factuur@aanmaning}}{%
+	   \TAALaanmaning%
+	   }{  \TAALfactuur%
+      }
+     }%
+    }%
+  }
+
+  \newsavebox\factuur@factuurbox
+
+  \newenvironment{factuurbrief}[1]{
+    \global\def\factuur@briefadres{##1}
+    \begin{lrbox}\factuur@factuurbox
+    \begin{factuur}
+  }{
+    \end{factuur}
+    \end{lrbox}
+    
+    % Onthoud of het totaal negatief is.
+    \ifthenelse{\thefactuur@Totaal < 0}{
+      \setboolean{factuur@teruggave}{true}
+    }{
+      \setboolean{factuur@teruggave}{false}
+    }
+
+    \begin{brief}{\factuur@briefadres}
+    \geenopening
+    {\aes@fonttitel\ifthenelse{\equal{\factuur@titel}{}}{%
+        \@autofactuurtitel%
+      }{%
+        \factuur@titel%
+      }%
+    }
+
+    \usebox\factuur@factuurbox
+    
+    \bigskip
+   
+    \aes@betaalinstructie
+     
+    \end{brief}
+  }
+}
+
+% Controleer of we in een aesbrief zitten.
+\ifthenelse{\isundefined\filename}{\factuur@geenaesbrief}{
+  \ifthenelse{\equal{\filename}{aesbrief}}{\factuur@welaesbrief}{\factuur@geenaesbrief}
+}
+
+
+\endinput

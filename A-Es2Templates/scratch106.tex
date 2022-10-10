@@ -1,0 +1,30 @@
+\documentclass{aesbrief}
+\usepackage{aesfactuur}
+
+\begin{document}
+
+\cienaam{}
+\datum{\today}
+\uwk{} %kenmerk van de andere partij %
+\onsk{} %eigen kenmerk, zoals Commissie1718Bedrijf1
+\email{} %e-mail van de commissie %
+\subject{} %onderwerp van de factuur %
+
+%\factuurtitel{Creditnota} %in geval dat het gaat om een creditnota i.p.v. een factuur
+\begin{factuurbrief}{
+bedrijfsnaam\\
+T.a.v. contactpersoon\\
+adresregel 1\\ %straat en huisnummer %
+adresregel 2\\ %postcode en plaats %
+}
+
+\post{Bedrag 1}{40,00}
+\post{Bedrag 2}{60,00}
+\subtotaal
+% \procent{Rente}{4}
+\procent{BTW}{19}
+%\post{Bedrag zonder btw}{100,00}
+
+\end{factuurbrief}
+
+\end{document}
